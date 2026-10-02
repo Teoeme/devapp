@@ -242,6 +242,10 @@ input {
   border-radius: 6px;
 }
 
+.list-label.nested {
+  margin: 4px 0 2px 18px;
+}
+
 .list-label.drop {
   outline: 1px dashed var(--accent);
   background: var(--accent-soft);
@@ -294,11 +298,17 @@ input {
 
 .folder-item.nested {
   margin-left: 18px;
+  /* El margen se descuenta del ancho: con 100% la fila se salía del sidebar. */
+  width: calc(100% - 18px);
 }
 
 .folder-item.missing .folder-name {
   color: var(--danger);
   text-decoration: line-through;
+}
+
+.folder-item .block-missing {
+  flex: none;
 }
 
 .folder-text {

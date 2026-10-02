@@ -1,6 +1,8 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { canonicalPath, readGitMetadata } from './git'
+import { isDirectory } from './paths'
 import type { Folder, Project, Task, TaskStep, Workspace } from '../shared/types'
 
 /** Nombres de userData de antes del rebranding a Selene. */
@@ -37,9 +39,13 @@ function read(): Workspace {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<Workspace>
     return {
       projects: Array.isArray(parsed.projects) ? parsed.projects : [],
-      // `projectId` puede faltar en datos guardados por versiones anteriores.
+      // `projectId` y `origin` pueden faltar en datos guardados por versiones anteriores.
       folders: Array.isArray(parsed.folders)
-        ? parsed.folders.map((f) => ({ ...f, projectId: f.projectId ?? null }))
+        ? parsed.folders.map((f) => ({
+            ...f,
+            projectId: f.projectId ?? null,
+            origin: f.origin ?? 'manual'
+          }))
         : [],
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : []
     }
@@ -95,6 +101,8 @@ export function addFolders(paths: string[], projectId: string | null = null): Wo
     if (existing) {
       // Ya estaba: si se está agregando a un proyecto, la movemos ahí.
       if (projectId) existing.projectId = projectId
+      // Agregarla a mano es decidir conservarla: deja de ser efímera.
+      existing.origin = 'manual'
       continue
     }
     const folder: Folder = {
@@ -102,13 +110,68 @@ export function addFolders(paths: string[], projectId: string | null = null): Wo
       path,
       name: basename(path) || path,
       addedAt: Date.now(),
-      projectId
+      projectId,
+      origin: 'manual'
     }
     data.folders.push(folder)
     byPath.set(path, folder)
   }
 
   return write(data)
+}
+
+/**
+ * Descarta las carpetas externas cuya ruta ya no existe (worktrees borrados).
+ * Se llama una vez al arrancar: durante la sesión se muestran como eliminadas
+ * para no cortar a un agente que todavía esté terminando. Las que usa algún
+ * conjunto de scripts se conservan: descartarlas borraría sus pasos en silencio.
+ */
+export function pruneVanishedExternalFolders(): void {
+  const data = read()
+  const folderIdsInTasks = new Set(data.tasks.flatMap((t) => t.steps.map((s) => s.folderId)))
+  const survivors = data.folders.filter(
+    (f) => f.origin === 'manual' || folderIdsInTasks.has(f.id) || isDirectory(f.path)
+  )
+  if (survivors.length === data.folders.length) return
+  data.folders = survivors
+  write(data)
+}
+
+/** Proyecto de la carpeta que aloja el repo principal de este worktree, si hay uno. */
+function findProjectOfMainRepo(data: Workspace, dir: string): string | null {
+  const mainRepoPath = readGitMetadata(dir)?.mainRepoPath
+  if (!mainRepoPath) return null
+  const mainRepoFolder = data.folders.find((f) => canonicalPath(f.path) === mainRepoPath)
+  return mainRepoFolder?.projectId ?? null
+}
+
+/**
+ * Agrega una carpeta abierta desde afuera. Si ya estaba, conserva su origen y
+ * su proyecto; si es un worktree de un repo ya agrupado, entra en ese proyecto
+ * (también si ya estaba suelta, por si el repo principal se agregó después).
+ */
+export function addExternalFolder(path: string): { workspace: Workspace; folderId: string } {
+  const data = read()
+  const known = data.folders.find((f) => f.path === path)
+  if (known) {
+    const projectId = known.origin === 'external' && !known.projectId
+      ? findProjectOfMainRepo(data, path)
+      : null
+    if (!projectId) return { workspace: data, folderId: known.id }
+    known.projectId = projectId
+    return { workspace: write(data), folderId: known.id }
+  }
+
+  const folder: Folder = {
+    id: id('f'),
+    path,
+    name: basename(path) || path,
+    addedAt: Date.now(),
+    projectId: findProjectOfMainRepo(data, path),
+    origin: 'external'
+  }
+  data.folders.push(folder)
+  return { workspace: write(data), folderId: folder.id }
 }
 
 export function removeFolder(folderId: string): Workspace {

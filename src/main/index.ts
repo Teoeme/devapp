@@ -1,16 +1,19 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readDirectory, searchFiles } from './files'
 import { buildMenu } from './menu'
+import { isDirectory, isDirectoryAsync, normalizeFolderPath } from './paths'
 import { inspectProject } from './projects'
 import {
+  addExternalFolder,
   addFolders,
   assignFolder,
   createProject,
   createTask,
   getWorkspace,
+  pruneVanishedExternalFolders,
   removeFolder,
   removeProject,
   removeTask,
@@ -27,11 +30,26 @@ import {
   resizeSession,
   writeSession
 } from './terminals'
-import type { FileSearchOptions, SessionOptions, TaskStep } from '../shared/types'
+import type {
+  ExternalFolderOpened,
+  FileSearchOptions,
+  SessionOptions,
+  TaskStep
+} from '../shared/types'
+
+/** Carpeta de datos del modo desarrollo: no debe compartir datos ni candado con la app instalada. */
+const DEVELOPMENT_USER_DATA_DIR = 'selene-dev'
+/** `argv` empaquetado: [ejecutable, ...args]; en desarrollo: [electron, script, ...args]. */
+const PACKAGED_ARGV_OFFSET = 1
+const DEVELOPMENT_ARGV_OFFSET = 2
 
 const __dirname_ = fileURLToPath(new URL('.', import.meta.url))
 
 let mainWindow: BrowserWindow | null = null
+
+/** Rutas pedidas desde afuera que todavía no se agregaron al workspace (app o renderer sin listo). */
+const pendingExternalPaths: string[] = []
+let rendererListening = false
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -52,8 +70,13 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+  // Recargar (o el HMR) reinicia el renderer: hasta que vuelva a avisar, se encola.
+  mainWindow.webContents.on('did-start-loading', () => {
+    rendererListening = false
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
+    rendererListening = false
     // Cerrar la ventana descarta las pestañas: sus procesos no deben sobrevivir.
     killAllSessions()
   })
@@ -80,15 +103,68 @@ function createWindow(): void {
   }
 }
 
-function isDirectory(path: string): boolean {
-  try {
-    return existsSync(path) && statSync(path).isDirectory()
-  } catch {
-    return false
+/** Argumentos de línea de comandos que son carpetas; los relativos se resuelven contra `baseDir`. */
+function folderPathsFromArgv(argv: string[], baseDir: string): string[] {
+  const offset = app.isPackaged ? PACKAGED_ARGV_OFFSET : DEVELOPMENT_ARGV_OFFSET
+  return argv
+    .slice(offset)
+    .filter((arg) => !arg.startsWith('-'))
+    .map((arg) => normalizeFolderPath(arg, baseDir))
+}
+
+/** Lo que una segunda instancia le pasa a la principal antes de cerrarse. */
+interface SecondInstanceData {
+  folderPaths: string[]
+}
+
+function folderPathsFromInstanceData(data: unknown): string[] {
+  const folderPaths = (data as Partial<SecondInstanceData> | null)?.folderPaths
+  return Array.isArray(folderPaths) ? folderPaths.filter((path) => typeof path === 'string') : []
+}
+
+function liveMainWindow(): BrowserWindow | null {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+}
+
+/** Trae la ventana al frente; si no hay (macOS la deja cerrar), la crea. */
+function showMainWindow(): void {
+  if (!app.isReady()) return
+  if (!liveMainWindow()) createWindow()
+  const window = liveMainWindow()
+  if (!window) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+}
+
+/** Agrega al workspace las carpetas pendientes y avisa al renderer; espera a que este escuche. */
+function addPendingFoldersAndNotify(): void {
+  if (!rendererListening) return
+  for (const path of pendingExternalPaths.splice(0)) {
+    try {
+      if (!isDirectory(path)) continue
+      const opened: ExternalFolderOpened = addExternalFolder(path)
+      liveMainWindow()?.webContents.send('external:folder-opened', opened)
+    } catch (error) {
+      console.error(`No se pudo abrir la carpeta externa ${path}`, error)
+    }
   }
 }
 
+/** Único punto de entrada de carpetas abiertas desde afuera (open-file, argv, segunda instancia). */
+function openExternalFolder(path: string): void {
+  pendingExternalPaths.push(normalizeFolderPath(path))
+  // `open-file` puede llegar antes de `ready`: la ventana se crea al arrancar.
+  showMainWindow()
+  addPendingFoldersAndNotify()
+}
+
 function registerIpc(): void {
+  ipcMain.on('external:ready', () => {
+    rendererListening = true
+    addPendingFoldersAndNotify()
+  })
+
   ipcMain.handle('app:info', () => ({
     platform: process.platform,
     version: app.getVersion(),
@@ -142,6 +218,12 @@ function registerIpc(): void {
   ipcMain.handle('workspace:removeTask', (_event, id: string) => removeTask(id))
 
   ipcMain.handle('project:inspect', (_event, path: string) => inspectProject(path))
+  // Asincrónico: un volumen de red colgado no debe congelar el proceso que bombea las terminales.
+  ipcMain.handle('project:findMissing', async (_event, paths: string[]) => {
+    const candidates = Array.isArray(paths) ? paths : []
+    const present = await Promise.all(candidates.map(isDirectoryAsync))
+    return candidates.filter((_path, index) => !present[index])
+  })
 
   ipcMain.handle('files:read', (_event, path: string) => readDirectory(path))
   ipcMain.handle('files:search', (_event, options: FileSearchOptions) => searchFiles(options))
@@ -175,19 +257,54 @@ function registerIpc(): void {
   ipcMain.on('session:kill', (_event, id: string) => killSession(id))
 }
 
-app.whenReady().then(() => {
-  registerIpc()
-  buildMenu()
-  createWindow()
+function startApp(): void {
+  pendingExternalPaths.push(...instanceData.folderPaths)
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  // macOS entrega las carpetas por este evento (no por argv), incluso antes de `ready`.
+  app.on('open-file', (event, path) => {
+    event.preventDefault()
+    openExternalFolder(path)
   })
-})
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+  // No se usa el `argv` del evento: Chromium le intercala switches propios y
+  // las posiciones dejan de valer. Las rutas llegan ya resueltas por la otra instancia.
+  app.on('second-instance', (_event, _argv, _workingDirectory, additionalData) => {
+    const folderPaths = folderPathsFromInstanceData(additionalData)
+    for (const path of folderPaths) openExternalFolder(path)
+    // Sin carpetas, igual traemos la ventana al frente.
+    if (folderPaths.length === 0) showMainWindow()
+  })
+
+  app.whenReady().then(() => {
+    pruneVanishedExternalFolders()
+    registerIpc()
+    buildMenu()
+    createWindow()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit()
+  })
+}
+
+// El candado de instancia única depende de userData: se separa antes de pedirlo.
+if (!app.isPackaged) {
+  app.setPath('userData', join(app.getPath('appData'), DEVELOPMENT_USER_DATA_DIR))
+}
+
+const instanceData: SecondInstanceData = {
+  folderPaths: folderPathsFromArgv(process.argv, process.cwd())
+}
+
+if (app.requestSingleInstanceLock(instanceData)) {
+  startApp()
+} else {
+  app.quit()
+}
 
 // Al salir no alcanza con pedir el kill y cerrar: hay que darle al SIGKILL de
 // respaldo el tiempo de llegar, o los procesos hijos quedan huérfanos.

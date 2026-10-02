@@ -1,3 +1,10 @@
+/**
+ * Cómo llegó la carpeta a la lista: `manual` la agregó el usuario; `external`
+ * la abrió otra herramienta (p. ej. un worktree efímero de un agente) y se
+ * descarta sola cuando su ruta deja de existir.
+ */
+export type FolderOrigin = 'manual' | 'external'
+
 export interface Folder {
   id: string
   path: string
@@ -5,6 +12,7 @@ export interface Folder {
   addedAt: number
   /** Proyecto al que pertenece; `null` si es una carpeta suelta. */
   projectId: string | null
+  origin: FolderOrigin
 }
 
 export interface Project {
@@ -38,6 +46,12 @@ export interface Workspace {
   projects: Project[]
   folders: Folder[]
   tasks: Task[]
+}
+
+/** Aviso del main al renderer: otra herramienta abrió una carpeta en la app. */
+export interface ExternalFolderOpened {
+  workspace: Workspace
+  folderId: string
 }
 
 export interface ProjectInfo {

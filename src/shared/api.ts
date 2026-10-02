@@ -1,5 +1,6 @@
 import type {
   DirEntry,
+  ExternalFolderOpened,
   FileSearchOptions,
   FileSearchResult,
   ProjectInfo,
@@ -49,6 +50,8 @@ export interface DevAppApi {
 
   project: {
     inspect(path: string): Promise<ProjectInfo>
+    /** Cuáles de estas rutas ya no existen como carpeta (solo `stat`, sin inspeccionar). */
+    findMissing(paths: string[]): Promise<string[]>
   }
 
   files: {
@@ -69,6 +72,12 @@ export interface DevAppApi {
   pathsFromDrop(files: File[]): string[]
 
   onMenuAction(listener: (action: MenuAction) => void): () => void
+
+  /** Carpeta abierta desde afuera (`open -a Selene <ruta>`); ya está agregada al workspace. */
+  onExternalFolderOpened(listener: (event: ExternalFolderOpened) => void): () => void
+
+  /** Avisa al main que el renderer ya escucha: recién ahí se le entregan las carpetas pendientes. */
+  notifyExternalReady(): void
 
   session: {
     create(options: SessionOptions): Promise<SessionCreated>

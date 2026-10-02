@@ -25,6 +25,16 @@ mac:
   # Sin firmar: la app es de uso propio. Para distribuirla hay que
   # configurar identity + notarización.
   identity: null
+  # Declarar `public.folder` hace que macOS ofrezca Selene para abrir carpetas
+  # (`open -a Selene <ruta>`, arrastrar al ícono del Dock) y las entregue por
+  # el evento open-file; sin esto las rechaza.
+  extendInfo:
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: Carpeta
+        CFBundleTypeRole: Viewer
+        LSHandlerRank: Alternate
+        LSItemContentTypes:
+          - public.folder
 
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}
