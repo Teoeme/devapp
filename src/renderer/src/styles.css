@@ -67,6 +67,10 @@ input {
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
+  /* Sin fila explícita, la fila implícita es `auto` y crece hasta el alto del
+     contenido de .main (el árbol de archivos entero): la ventana lo recorta y
+     la terminal queda dimensionada más alta de lo que se ve. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 
