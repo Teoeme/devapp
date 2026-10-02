@@ -50,6 +50,7 @@ export interface Subpackage {
   path: string
   packageManager: PackageManager
   scripts: Record<string, string>
+  nodeFiles: string[]
 }
 
 export interface ProjectInfo {

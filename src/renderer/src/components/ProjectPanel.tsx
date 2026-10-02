@@ -15,7 +15,7 @@ interface Props {
   onOpenTerminal: (folder: Folder) => void
 }
 
-/** Un package.json con scripts: el de la raíz o el de una subcarpeta. */
+/** La raíz o una subcarpeta con package.json: lo que se ejecuta desde una pestaña. */
 interface ScriptSource {
   /** Ruta relativa a la carpeta abierta; `''` es la raíz. */
   relDir: string
@@ -25,6 +25,7 @@ interface ScriptSource {
   cwd: string
   packageManager: PackageManager | null
   scripts: [string, string][]
+  nodeFiles: string[]
 }
 
 const ROOT_REL_DIR = ''
@@ -44,10 +45,11 @@ function scriptSources(folder: Folder, info: ProjectInfo | null): ScriptSource[]
     location: `${folder.name}/${pkg.relDir}`,
     cwd: pkg.path,
     packageManager: pkg.packageManager,
-    scripts: Object.entries(pkg.scripts)
+    scripts: Object.entries(pkg.scripts),
+    nodeFiles: pkg.nodeFiles
   }))
   const rootScripts = Object.entries(info.scripts)
-  if (rootScripts.length === 0) return sources
+  if (rootScripts.length === 0 && info.nodeFiles.length === 0) return sources
   return [
     {
       relDir: ROOT_REL_DIR,
@@ -55,7 +57,8 @@ function scriptSources(folder: Folder, info: ProjectInfo | null): ScriptSource[]
       location: folder.name,
       cwd: folder.path,
       packageManager: info.packageManager,
-      scripts: rootScripts
+      scripts: rootScripts,
+      nodeFiles: info.nodeFiles
     },
     ...sources
   ]
@@ -78,13 +81,18 @@ function FolderBlock({
   const sources = scriptSources(folder, info)
   // Si la pestaña elegida desaparece al re-inspeccionar, se vuelve a la primera.
   const source = sources.find((candidate) => candidate.relDir === selectedRelDir) ?? sources[0]
-  const nodeFiles = info?.nodeFiles ?? []
+  const isSubpackage = source !== undefined && source.relDir !== ROOT_REL_DIR
+  const cwd = source?.cwd ?? folder.path
+  const location = source?.location ?? folder.name
+  const terminalTitle = (text: string): string =>
+    isSubpackage ? `${source.label} · ${text}` : text
 
   const submit = (event: React.FormEvent): void => {
     event.preventDefault()
     const trimmed = command.trim()
     if (!trimmed) return
-    onRun(folder, trimmed, trimmed.length > 28 ? `${trimmed.slice(0, 28)}…` : trimmed)
+    const shortCommand = trimmed.length > 28 ? `${trimmed.slice(0, 28)}…` : trimmed
+    onRun(folder, trimmed, terminalTitle(shortCommand), cwd)
     setCommand('')
   }
 
@@ -102,39 +110,39 @@ function FolderBlock({
         </div>
       )}
 
-      {source && (
+      {sources.length > 1 && (
+        <div className="pkg-tabs" role="group" aria-label="Carpetas con scripts">
+          {sources.map((tab) => (
+            <button
+              key={tab.relDir}
+              type="button"
+              className={`pkg-tab${tab === source ? ' active' : ''}`}
+              aria-pressed={tab === source}
+              title={tab.location}
+              onClick={() => setSelectedRelDir(tab.relDir)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {source && source.scripts.length > 0 && (
         <div className="panel-row">
           {!showName && (
             <div className="panel-label">
               Scripts de package.json {source.packageManager && `· ${source.packageManager}`}
             </div>
           )}
-          {sources.length > 1 && (
-            <div className="pkg-tabs" role="group" aria-label="Carpetas con scripts">
-              {sources.map((tab) => (
-                <button
-                  key={tab.relDir}
-                  type="button"
-                  className={`pkg-tab${tab === source ? ' active' : ''}`}
-                  aria-pressed={tab === source}
-                  title={tab.location}
-                  onClick={() => setSelectedRelDir(tab.relDir)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          )}
           <div className="chips">
             {source.scripts.map(([name, script]) => {
               const cmd = runScriptCommand(source.packageManager, name)
-              const title = source.relDir === ROOT_REL_DIR ? cmd : `${source.label} · ${cmd}`
               return (
                 <button
                   key={name}
                   className="chip"
                   title={script}
-                  onClick={() => onRun(folder, cmd, title, source.cwd)}
+                  onClick={() => onRun(folder, cmd, terminalTitle(cmd), cwd)}
                 >
                   <span className="play">▶</span>
                   {name}
@@ -146,18 +154,18 @@ function FolderBlock({
         </div>
       )}
 
-      {nodeFiles.length > 0 && (
+      {source && source.nodeFiles.length > 0 && (
         <div className="panel-row">
           {!showName && <div className="panel-label">Archivos ejecutables con node</div>}
           <div className="chips">
-            {nodeFiles.map((file) => {
+            {source.nodeFiles.map((file) => {
               const cmd = runNodeFileCommand(file)
               return (
                 <button
                   key={file}
                   className="chip"
                   title={cmd}
-                  onClick={() => onRun(folder, cmd, file)}
+                  onClick={() => onRun(folder, cmd, terminalTitle(file), cwd)}
                 >
                   <span className="play">▶</span>
                   {file}
@@ -168,7 +176,7 @@ function FolderBlock({
         </div>
       )}
 
-      {sources.length === 0 && nodeFiles.length === 0 && (
+      {sources.length === 0 && (
         <div className="panel-row panel-empty">
           Sin <code>package.json</code> ni archivos <code>.js</code> en la raíz.
         </div>
@@ -180,7 +188,7 @@ function FolderBlock({
             className="cmd-input"
             value={command}
             onChange={(event) => setCommand(event.target.value)}
-            placeholder={`Ejecutar un comando en ${folder.name}…`}
+            placeholder={`Ejecutar un comando en ${location}…`}
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"

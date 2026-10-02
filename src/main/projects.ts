@@ -114,7 +114,8 @@ function findSubpackages(root: string, rootManager: PackageManager): Subpackage[
           relDir: childRelDir,
           path: childDir,
           packageManager: detectLockfileManager(childDir) ?? rootManager,
-          scripts
+          scripts,
+          nodeFiles: findNodeFiles(childDir)
         })
       }
       walk(childDir, childRelDir, depth + 1)
