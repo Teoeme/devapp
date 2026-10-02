@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { runNodeFileCommand, runScriptCommand } from '../../../shared/commands'
-import type { Folder, ProjectInfo } from '../../../shared/types'
+import type { Folder, PackageManager, ProjectInfo } from '../../../shared/types'
 
 export interface PanelEntry {
   folder: Folder
@@ -11,8 +11,54 @@ interface Props {
   entries: PanelEntry[]
   /** En un proyecto mostramos de qué carpeta es cada bloque. */
   showFolderNames: boolean
-  onRun: (folder: Folder, command: string, title: string) => void
+  onRun: (folder: Folder, command: string, title: string, cwd?: string) => void
   onOpenTerminal: (folder: Folder) => void
+}
+
+/** Un package.json con scripts: el de la raíz o el de una subcarpeta. */
+interface ScriptSource {
+  /** Ruta relativa a la carpeta abierta; `''` es la raíz. */
+  relDir: string
+  label: string
+  /** Ruta desde la carpeta abierta hasta el package.json. */
+  location: string
+  cwd: string
+  packageManager: PackageManager | null
+  scripts: [string, string][]
+}
+
+const ROOT_REL_DIR = ''
+
+/** Pestaña con la carpeta padre del package.json; si está más abajo, `…/carpeta`. */
+function subpackageLabel(relDir: string): string {
+  const segments = relDir.split('/')
+  const parentName = segments[segments.length - 1]
+  return segments.length > 1 ? `…/${parentName}` : parentName
+}
+
+function scriptSources(folder: Folder, info: ProjectInfo | null): ScriptSource[] {
+  if (!info) return []
+  const sources: ScriptSource[] = info.subpackages.map((pkg) => ({
+    relDir: pkg.relDir,
+    label: subpackageLabel(pkg.relDir),
+    location: `${folder.name}/${pkg.relDir}`,
+    cwd: pkg.path,
+    packageManager: pkg.packageManager,
+    scripts: Object.entries(pkg.scripts)
+  }))
+  const rootScripts = Object.entries(info.scripts)
+  if (rootScripts.length === 0) return sources
+  return [
+    {
+      relDir: ROOT_REL_DIR,
+      label: folder.name,
+      location: folder.name,
+      cwd: folder.path,
+      packageManager: info.packageManager,
+      scripts: rootScripts
+    },
+    ...sources
+  ]
 }
 
 function FolderBlock({
@@ -27,8 +73,11 @@ function FolderBlock({
   onOpenTerminal: Props['onOpenTerminal']
 }): React.JSX.Element {
   const [command, setCommand] = useState('')
+  const [selectedRelDir, setSelectedRelDir] = useState(ROOT_REL_DIR)
 
-  const scripts = info ? Object.entries(info.scripts) : []
+  const sources = scriptSources(folder, info)
+  // Si la pestaña elegida desaparece al re-inspeccionar, se vuelve a la primera.
+  const source = sources.find((candidate) => candidate.relDir === selectedRelDir) ?? sources[0]
   const nodeFiles = info?.nodeFiles ?? []
 
   const submit = (event: React.FormEvent): void => {
@@ -53,22 +102,39 @@ function FolderBlock({
         </div>
       )}
 
-      {scripts.length > 0 && (
+      {source && (
         <div className="panel-row">
           {!showName && (
             <div className="panel-label">
-              Scripts de package.json {info?.packageManager && `· ${info.packageManager}`}
+              Scripts de package.json {source.packageManager && `· ${source.packageManager}`}
+            </div>
+          )}
+          {sources.length > 1 && (
+            <div className="pkg-tabs" role="group" aria-label="Carpetas con scripts">
+              {sources.map((tab) => (
+                <button
+                  key={tab.relDir}
+                  type="button"
+                  className={`pkg-tab${tab === source ? ' active' : ''}`}
+                  aria-pressed={tab === source}
+                  title={tab.location}
+                  onClick={() => setSelectedRelDir(tab.relDir)}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
           )}
           <div className="chips">
-            {scripts.map(([name, script]) => {
-              const cmd = runScriptCommand(info?.packageManager ?? null, name)
+            {source.scripts.map(([name, script]) => {
+              const cmd = runScriptCommand(source.packageManager, name)
+              const title = source.relDir === ROOT_REL_DIR ? cmd : `${source.label} · ${cmd}`
               return (
                 <button
                   key={name}
                   className="chip"
                   title={script}
-                  onClick={() => onRun(folder, cmd, cmd)}
+                  onClick={() => onRun(folder, cmd, title, source.cwd)}
                 >
                   <span className="play">▶</span>
                   {name}
@@ -102,7 +168,7 @@ function FolderBlock({
         </div>
       )}
 
-      {scripts.length === 0 && nodeFiles.length === 0 && (
+      {sources.length === 0 && nodeFiles.length === 0 && (
         <div className="panel-row panel-empty">
           Sin <code>package.json</code> ni archivos <code>.js</code> en la raíz.
         </div>

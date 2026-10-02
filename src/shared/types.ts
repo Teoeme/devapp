@@ -40,12 +40,25 @@ export interface Workspace {
   tasks: Task[]
 }
 
+export type PackageManager = 'npm' | 'yarn' | 'pnpm' | 'bun'
+
+/** Un package.json con scripts dentro de una subcarpeta (monorepos). */
+export interface Subpackage {
+  /** Ruta relativa a la carpeta abierta, con `/`. Ej: `packages/core`. */
+  relDir: string
+  /** Ruta absoluta de la carpeta del package.json. */
+  path: string
+  packageManager: PackageManager
+  scripts: Record<string, string>
+}
+
 export interface ProjectInfo {
   exists: boolean
   isGitRepo: boolean
   branch: string | null
-  packageManager: 'npm' | 'yarn' | 'pnpm' | 'bun' | null
+  packageManager: PackageManager | null
   scripts: Record<string, string>
+  subpackages: Subpackage[]
   nodeFiles: string[]
 }
 

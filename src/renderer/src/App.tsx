@@ -492,7 +492,7 @@ export default function App(): React.JSX.Element {
               <ProjectPanel
                 entries={panelEntries}
                 showFolderNames={activeProject !== null}
-                onRun={(folder, command, title) => openTab(folder, command, title)}
+                onRun={(folder, command, title, cwd) => openTab(folder, command, title, cwd)}
                 onOpenTerminal={(folder) => openTab(folder)}
               />
             )}
