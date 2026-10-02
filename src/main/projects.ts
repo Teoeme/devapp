@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { readGitMetadata } from './git'
 import type { ProjectInfo } from '../shared/types'
 
 const SCRIPT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts']
@@ -26,18 +27,6 @@ function readScripts(dir: string): Record<string, string> {
     return scripts
   } catch {
     return {}
-  }
-}
-
-function readBranch(dir: string): string | null {
-  const headPath = join(dir, '.git', 'HEAD')
-  if (!existsSync(headPath)) return null
-  try {
-    const head = readFileSync(headPath, 'utf8').trim()
-    const match = head.match(/^ref:\s*refs\/heads\/(.+)$/)
-    return match ? match[1] : head.slice(0, 7)
-  } catch {
-    return null
   }
 }
 
@@ -86,10 +75,11 @@ export function inspectProject(dir: string): ProjectInfo {
     }
   }
 
+  const git = readGitMetadata(dir)
   return {
     exists: true,
-    isGitRepo: existsSync(join(dir, '.git')),
-    branch: readBranch(dir),
+    isGitRepo: git !== null,
+    branch: git?.branch ?? null,
     packageManager: detectPackageManager(dir),
     scripts: readScripts(dir),
     nodeFiles: findNodeFiles(dir)
