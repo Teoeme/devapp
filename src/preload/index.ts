@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { AppInfo, DevAppApi, MenuAction } from '../shared/api'
 import type {
   DirEntry,
+  ExternalFolderOpened,
   FileSearchOptions,
   FileSearchResult,
   ProjectInfo,
@@ -43,7 +44,9 @@ const api: DevAppApi = {
   },
 
   project: {
-    inspect: (path: string): Promise<ProjectInfo> => ipcRenderer.invoke('project:inspect', path)
+    inspect: (path: string): Promise<ProjectInfo> => ipcRenderer.invoke('project:inspect', path),
+    findMissing: (paths: string[]): Promise<string[]> =>
+      ipcRenderer.invoke('project:findMissing', paths)
   },
 
   files: {
@@ -66,6 +69,14 @@ const api: DevAppApi = {
     ipcRenderer.on('menu:action', handler)
     return () => ipcRenderer.removeListener('menu:action', handler)
   },
+
+  onExternalFolderOpened: (listener: (event: ExternalFolderOpened) => void): (() => void) => {
+    const handler = (_e: unknown, event: ExternalFolderOpened): void => listener(event)
+    ipcRenderer.on('external:folder-opened', handler)
+    return () => ipcRenderer.removeListener('external:folder-opened', handler)
+  },
+
+  notifyExternalReady: (): void => ipcRenderer.send('external:ready'),
 
   session: {
     create: (options: SessionOptions): Promise<SessionCreated> =>

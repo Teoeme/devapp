@@ -129,6 +129,9 @@ export default function Sidebar({
           <span className="folder-name">{folder.name}</span>
           <span className="folder-path">{folder.path}</span>
         </span>
+        {folder.origin === 'external' && missingIds.has(folder.id) && (
+          <span className="block-missing">eliminado</span>
+        )}
         {running > 0 && <span className="folder-badge">{running}</span>}
         <button
           className="row-action"
@@ -142,6 +145,23 @@ export default function Sidebar({
         </button>
       </div>
     )
+  }
+
+  /** Carpetas manuales primero; las abiertas por agentes, aparte bajo su propio rótulo. */
+  const folderRows = (list: Folder[], nested: boolean): React.JSX.Element[] => {
+    const manualFolders = list.filter((f) => f.origin === 'manual')
+    const agentFolders = list.filter((f) => f.origin === 'external')
+    return [
+      ...manualFolders.map((folder) => folderRow(folder, nested)),
+      ...(agentFolders.length > 0
+        ? [
+            <div key="agents-label" className={`list-label${nested ? ' nested' : ''}`}>
+              Agentes
+            </div>,
+            ...agentFolders.map((folder) => folderRow(folder, nested))
+          ]
+        : [])
+    ]
   }
 
   const projectRow = (project: Project): React.JSX.Element => {
@@ -226,7 +246,7 @@ export default function Sidebar({
 
         {!collapsed &&
           (children.length > 0 ? (
-            children.map((folder) => folderRow(folder, true))
+            folderRows(children, true)
           ) : (
             <div className="project-empty">Arrastrá carpetas acá o usá +</div>
           ))}
@@ -267,7 +287,7 @@ export default function Sidebar({
                 Sin proyecto
               </div>
             )}
-            {ungrouped.map((folder) => folderRow(folder, false))}
+            {folderRows(ungrouped, false)}
           </>
         )}
       </nav>

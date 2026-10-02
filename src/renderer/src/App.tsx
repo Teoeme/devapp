@@ -159,6 +159,49 @@ export default function App(): React.JSX.Element {
     return () => window.removeEventListener('focus', onFocus)
   }, [scopeFolders, inspectFolders])
 
+  // Un worktree puede desaparecer estando la app fuera de foco: alcanza con
+  // saber si la ruta sigue existiendo, sin inspeccionar cada carpeta externa.
+  const externalFoldersRef = useRef<Folder[]>([])
+  useEffect(() => {
+    externalFoldersRef.current = workspace.folders.filter((f) => f.origin === 'external')
+  }, [workspace.folders])
+
+  useEffect(() => {
+    const onFocus = (): void => {
+      const externalFolders = externalFoldersRef.current
+      if (externalFolders.length === 0) return
+      window.api.project
+        .findMissing(externalFolders.map((f) => f.path))
+        .then((missing) => {
+          const missingPaths = new Set(missing)
+          setMissingIds((prev) => {
+            const next = new Set(prev)
+            for (const folder of externalFolders) {
+              if (missingPaths.has(folder.path)) next.add(folder.id)
+              else next.delete(folder.id)
+            }
+            return next
+          })
+        })
+        // Puede fallar si la ventana se recarga a mitad de camino: el próximo foco lo reintenta.
+        .catch(() => undefined)
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
+
+  /* ---------- carpetas abiertas desde afuera ---------- */
+
+  useEffect(() => {
+    const unsubscribe = window.api.onExternalFolderOpened(({ workspace: next, folderId }) => {
+      applyWorkspace(next)
+      setSelection({ type: 'folder', id: folderId })
+    })
+    // Recién con la suscripción lista el main puede entregar lo que tenga pendiente.
+    window.api.notifyExternalReady()
+    return unsubscribe
+  }, [applyWorkspace])
+
   /* ---------- workspace ---------- */
 
   const addFolder = useCallback(
